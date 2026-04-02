@@ -1,0 +1,95 @@
+import axios from 'axios'
+
+const OW_KEY = import.meta.env.VITE_OPENWEATHER_API_KEY
+
+export async function getCurrentWeather(city) {
+  const res = await axios.get(
+    `https://api.openweathermap.org/data/2.5/weather?q=${city}&appid=${OW_KEY}&units=metric`
+  )
+  return res.data
+}
+
+export async function getHistoricalClimate(lat, lon) {
+  const endDate = new Date()
+  endDate.setDate(endDate.getDate() - 5)
+  const end = endDate.toISOString().split('T')[0]
+
+  const url = [
+    'https://archive-api.open-meteo.com/v1/archive',
+    `?latitude=${lat}&longitude=${lon}`,
+    `&start_date=2015-01-01&end_date=${end}`,
+    '&daily=temperature_2m_max,temperature_2m_min,precipitation_sum',
+    '&timezone=auto'
+  ].join('')
+
+  const res = await axios.get(url)
+  return res.data
+}
+
+export function processMonthlyAverages(historical) {
+  const { time, temperature_2m_max, temperature_2m_min, precipitation_sum } = historical.daily
+
+  const monthly = {}
+  time.forEach((date, i) => {
+    const key = date.slice(0, 7)
+    if (!monthly[key]) monthly[key] = { maxTemps: [], minTemps: [], rain: [] }
+    monthly[key].maxTemps.push(temperature_2m_max[i])
+    monthly[key].minTemps.push(temperature_2m_min[i])
+    monthly[key].rain.push(precipitation_sum[i] || 0)
+  })
+
+  const labels = [], avgMax = [], avgMin = [], totalRain = []
+  Object.entries(monthly).forEach(([month, d]) => {
+    labels.push(month)
+    avgMax.push(+(d.maxTemps.reduce((a, b) => a + b, 0) / d.maxTemps.length).toFixed(1))
+    avgMin.push(+(d.minTemps.reduce((a, b) => a + b, 0) / d.minTemps.length).toFixed(1))
+    totalRain.push(+(d.rain.reduce((a, b) => a + b, 0)).toFixed(1))
+  })
+
+  return { labels, avgMax, avgMin, totalRain }
+}
+
+export function computeStats(historical) {
+  const temps = historical.daily.temperature_2m_max.filter(Boolean)
+  const rains = historical.daily.precipitation_sum.filter(Boolean)
+  const avgTemp = (temps.reduce((a, b) => a + b, 0) / temps.length).toFixed(1)
+  const maxTemp = Math.max(...temps).toFixed(1)
+  const minTemp = Math.min(...historical.daily.temperature_2m_min.filter(Boolean)).toFixed(1)
+  const totalRain = rains.reduce((a, b) => a + b, 0).toFixed(0)
+  const yearlyRain = (totalRain / 10).toFixed(0)
+
+  const years = {}
+  historical.daily.time.forEach((date, i) => {
+    const yr = date.slice(0, 4)
+    if (!years[yr]) years[yr] = []
+    years[yr].push(historical.daily.temperature_2m_max[i] || 0)
+  })
+  const yearlyAvgs = Object.entries(years).map(([yr, vals]) => ({
+    year: yr,
+    avg: (vals.reduce((a, b) => a + b, 0) / vals.length).toFixed(2)
+  }))
+  const trend = yearlyAvgs.length > 1
+    ? (yearlyAvgs[yearlyAvgs.length - 1].avg - yearlyAvgs[0].avg).toFixed(2)
+    : 0
+
+  return { avgTemp, maxTemp, minTemp, yearlyRain, trend }
+}
+
+export async function get10DayForecast(lat, lon) {
+  const url = [
+    'https://api.open-meteo.com/v1/forecast',
+    `?latitude=${lat}&longitude=${lon}`,
+    '&daily=temperature_2m_max,temperature_2m_min',
+    '&timezone=auto',
+    '&forecast_days=10'
+  ].join('')
+
+  const res = await axios.get(url)
+  const { time, temperature_2m_max, temperature_2m_min } = res.data.daily
+
+  return {
+    labels: time.map(d => d.slice(5)),
+    maxTemps: temperature_2m_max,
+    minTemps: temperature_2m_min
+  }
+}
